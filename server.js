@@ -9,39 +9,34 @@ const app = express();
 app.use(express.json());
 app.use(express.static('public'));
 
-// ─── Phase 2: DB Connection ───────────────────────────────────────────────────
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(process.env.MONGO_URI, {
-    tls: true,
-    serverSelectionTimeoutMS: 5000,
+// ── Serverless-Safe DB Connection ─────────────────────────────────────────
+let db;
+let client;
+
+async function connectDB() {
+    if (db) return db; // reuse existing connection on warm starts
+    client = new MongoClient(process.env.MONGO_URI, {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
+    });
+    await client.connect();
+    db = client.db('zenith_cms');
+    console.log('✅ Connected to Cloud Database');
+    return db;
+}
+
+// Middleware — ensures DB is connected before every request
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error('❌ DB Connection Failed:', err.message);
+        res.status(500).json({ error: 'Database connection failed' });
+    }
 });
 
-let db;
-//async function connectDB() {
- //   try {
-  //      await client.connect();
-    //    db = client.db('zenith_cms');
-      //  console.log('✅ Connected to Cloud Database');
-   // } catch (err) {
-     //   console.error('❌ DB Connection Failed:', err.message);
-       // process.exit(1);
-  //  }
-//}
-async function connectDB() {
-    try {
-        await client.connect({ serverSelectionTimeoutMS: 5000 });
-        db = client.db('zenith_cms');
-        console.log('✅ Connected to Cloud Database');
-    } catch (err) {
-        console.error('❌ Full error:', JSON.stringify(err, null, 2));
-        process.exit(1);
-    }
-}
-connectDB();
-
-// ─── Phase 3: CRUD API ────────────────────────────────────────────────────────
-
-// GET ALL POSTS
+// ── GET ALL POSTS ─────────────────────────────────────────────────────────
 app.get('/api/posts', async (req, res) => {
     try {
         const posts = await db.collection('blogs').find().sort({ date: -1 }).toArray();
@@ -51,7 +46,7 @@ app.get('/api/posts', async (req, res) => {
     }
 });
 
-// GET SINGLE POST
+// ── GET SINGLE POST ───────────────────────────────────────────────────────
 app.get('/api/posts/:id', async (req, res) => {
     try {
         const post = await db.collection('blogs').findOne({ _id: new ObjectId(req.params.id) });
@@ -62,7 +57,7 @@ app.get('/api/posts/:id', async (req, res) => {
     }
 });
 
-// CREATE NEW POST
+// ── CREATE POST ───────────────────────────────────────────────────────────
 app.post('/api/posts', async (req, res) => {
     try {
         const { title, content, author, tag } = req.body;
@@ -70,14 +65,14 @@ app.post('/api/posts', async (req, res) => {
             return res.status(400).json({ error: 'Title, content, and author are required' });
         }
         const newPost = { title, content, author, tag: tag || 'General', date: new Date() };
-        const result = await db.collection('blogs').insertOne(newPost);
+        const result  = await db.collection('blogs').insertOne(newPost);
         res.status(201).json({ message: 'Post Created!', id: result.insertedId });
     } catch (err) {
         res.status(500).json({ error: 'Failed to create post' });
     }
 });
 
-// UPDATE POST
+// ── UPDATE POST ───────────────────────────────────────────────────────────
 app.put('/api/posts/:id', async (req, res) => {
     try {
         const { title, content, author, tag } = req.body;
@@ -91,7 +86,7 @@ app.put('/api/posts/:id', async (req, res) => {
     }
 });
 
-// DELETE POST
+// ── DELETE POST ───────────────────────────────────────────────────────────
 app.delete('/api/posts/:id', async (req, res) => {
     try {
         await db.collection('blogs').deleteOne({ _id: new ObjectId(req.params.id) });
@@ -101,6 +96,8 @@ app.delete('/api/posts/:id', async (req, res) => {
     }
 });
 
-// ─── Start Server ─────────────────────────────────────────────────────────────
+// ── Start Server ──────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+module.exports = app;
